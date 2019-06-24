@@ -412,7 +412,7 @@ void pidInitFilters(const pidProfile_t *pidProfile)
     }
 #endif
 #if defined(USE_ABSOLUTE_CONTROL)
-    if (itermRelax) {
+    if ((itermRelax) && (acCutoff > 0)) {
         for (int i = 0; i < XYZ_AXIS_COUNT; i++) {
             pt1FilterInit(&acLpf[i], pt1FilterGain(acCutoff, dT));
         }
@@ -1065,24 +1065,29 @@ float FAST_CODE applyRcSmoothingDerivativeFilter(int axis, float pidSetpointDelt
 STATIC_UNIT_TESTED void applyAbsoluteControl(const int axis, const float gyroRate, float *currentPidSetpoint, float *itermErrorRate)
 {
     if (acGain > 0 || debugMode == DEBUG_AC_ERROR) {
-        const float setpointLpf = pt1FilterApply(&acLpf[axis], *currentPidSetpoint);
-        const float setpointHpf = fabsf(*currentPidSetpoint - setpointLpf);
         float acErrorRate = 0;
-        const float gmaxac = setpointLpf + 2 * setpointHpf;
-        const float gminac = setpointLpf - 2 * setpointHpf;
-        if (gyroRate >= gminac && gyroRate <= gmaxac) {
-            const float acErrorRate1 = gmaxac - gyroRate;
-            const float acErrorRate2 = gminac - gyroRate;
-            if (acErrorRate1 * axisError[axis] < 0) {
-                acErrorRate = acErrorRate1;
+
+        if (acCutoff > 0) {
+            const float setpointLpf = pt1FilterApply(&acLpf[axis], *currentPidSetpoint);
+            const float setpointHpf = fabsf(*currentPidSetpoint - setpointLpf);
+            const float gmaxac = setpointLpf + 2 * setpointHpf;
+            const float gminac = setpointLpf - 2 * setpointHpf;
+            if (gyroRate >= gminac && gyroRate <= gmaxac) {
+                const float acErrorRate1 = gmaxac - gyroRate;
+                const float acErrorRate2 = gminac - gyroRate;
+                if (acErrorRate1 * axisError[axis] < 0) {
+                    acErrorRate = acErrorRate1;
+                } else {
+                    acErrorRate = acErrorRate2;
+                }
+                if (fabsf(acErrorRate * dT) > fabsf(axisError[axis]) ) {
+                    acErrorRate = -axisError[axis] * pidFrequency;
+                }
             } else {
-                acErrorRate = acErrorRate2;
-            }
-            if (fabsf(acErrorRate * dT) > fabsf(axisError[axis]) ) {
-                acErrorRate = -axisError[axis] * pidFrequency;
+                acErrorRate = (gyroRate > gmaxac ? gmaxac : gminac ) - gyroRate;
             }
         } else {
-            acErrorRate = (gyroRate > gmaxac ? gmaxac : gminac ) - gyroRate;
+            acErrorRate = *currentPidSetpoint - gyroRate;
         }
 
         if (isAirmodeActivated()) {
@@ -1097,6 +1102,12 @@ STATIC_UNIT_TESTED void applyAbsoluteControl(const int axis, const float gyroRat
             }
         }
         DEBUG_SET(DEBUG_AC_ERROR, axis, lrintf(axisError[axis] * 10));
+
+        if ((axis == FD_YAW) && ((debugMode == DEBUG_AC_ERROR) || (debugMode == DEBUG_AC_CORRECTION))) {
+            debug[3] = lrintf(sqrtf(axisError[FD_ROLL] * axisError[FD_ROLL] +
+                                    axisError[FD_PITCH] * axisError[FD_PITCH] +
+                                    axisError[FD_YAW] * axisError[FD_YAW]) * 10);
+        }
     }
 }
 #endif
